@@ -439,122 +439,78 @@ impl<'a> Parser<'a> {
     #[inline]
     fn parse_unquoted_value(&mut self, start: usize) -> Result<ParsedValue<'a>, Error> {
         let mut value = String::new();
-        let mut has_continuation = false;
         
         loop {
             if self.is_eof() {
                 break;
             }
             let line_start = self.cursor;
-            let mut comment_idx: Option<usize> = None;
             
-            // Optimize: scan for delimiters or comment start using slice iterator
+            // Strict Scan: Find first delimiter (Space, Tab, \n, \r)
+            // Note: We do NOT stop at '#'. In strict mode, an inline comment requires preceding whitespace.
+            // Since whitespace terminates the value, any '#' found before whitespace is a literal character.
             let remaining = &self.bytes[self.cursor..];
-            let mut offset = 0;
+            let (limit, stop_char) = match remaining.iter().position(|&b| b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') {
+                Some(pos) => (self.cursor + pos, Some(remaining[pos])),
+                None => (self.cursor + remaining.len(), None)
+            };
             
-            while offset < remaining.len() {
-                // Search for interesting characters: \n, \r, #
-                // We restart the search if we find a # that isn't a comment start
-                match remaining[offset..].iter().position(|&b| b == b'\n' || b == b'\r' || b == b'#') {
-                    Some(pos) => {
-                        let absolute_pos = offset + pos;
-                        let found_char = remaining[absolute_pos];
-                        
-                        if found_char == b'#' {
-                            // Check if it's a valid comment start (preceded by whitespace)
-                            // We need to check relative to cursor+absolute_pos
-                            let current_idx = self.cursor + absolute_pos;
-                            if current_idx > line_start {
-                                let prev = self.bytes[current_idx - 1];
-                                if prev == b' ' || prev == b'\t' {
-                                    if comment_idx.is_none() {
-                                        comment_idx = Some(current_idx - 1); // include the whitespace
-                                    }
-                                    // Found comment, we can stop the scan for this line
-                                    offset = absolute_pos; // will be added to cursor
-                                    break;
-                                }
-                            }
-                            // Not a comment start, continue scanning after this #
-                            offset = absolute_pos + 1;
-                        } else {
-                            // Found newline (\n or \r), end of line
-                            offset = absolute_pos;
-                            break;
-                        }
-                    }
-                    None => {
-                        // Reached EOF for this slice
-                        offset = remaining.len();
-                        break;
-                    }
+            // Logic:
+            // 1. Extract chunk [cursor..limit]
+            // 2. If stop_char is Space/Tab -> End value.
+            // 3. If stop_char is Newline/EOF -> Check for backslash at end of chunk.
+            
+            let chunk = &self.input[self.cursor..limit];
+            
+            // Check for backslash continuation ONLY if we didn't stop at whitespace
+            let mut is_continuation = false;
+            
+            // Helper to check if we stopped at effective EOL (Newline or EOF)
+            let stopped_at_eol = matches!(stop_char, Some(b'\n') | Some(b'\r') | None);
+            
+            if stopped_at_eol {
+                // Check if last char of chunk is backslash
+                if limit > line_start && self.bytes[limit - 1] == b'\\' {
+                    is_continuation = true;
                 }
             }
-            self.cursor += offset;
             
-            let mut end = comment_idx.unwrap_or(self.cursor);
-            while end > line_start && (self.bytes[end - 1] == b' ' || self.bytes[end - 1] == b'\t') {
-                end -= 1;
-            }
-            
-            // Spec 5.2: Backslash at EOF is literal (not continuation).
-            // Spec 5.2: Empty lines during continuation are consumed and continuation continues.
-            let mut is_continuation = end > line_start && self.bytes[end - 1] == b'\\' && !self.is_eof();
-            
-            if has_continuation && end == line_start {
-                // If we are already continuing, an empty line is treated as a continuation
-                // that adds nothing but keeps the loop going.
-                is_continuation = true;
-            }
-
-            if is_continuation && end > line_start {
-                end -= 1;
-            }
-            
-            let chunk = &self.input[line_start..end];
-            
-            if !has_continuation && !is_continuation {
-                // Spec 4.2.2: Unquoted values end at the first whitespace.
-                let mut final_chunk = chunk;
-                if let Some(idx) = chunk.find(|c: char| c == ' ' || c == '\t') {
-                    final_chunk = &chunk[..idx];
-                }
+            if is_continuation {
+                // Continuation found:
+                // Append chunk (minus backslash)
+                value.push_str(&chunk[..chunk.len()-1]);
                 
-                return Ok(ParsedValue {
-                    value: Cow::Borrowed(final_chunk),
-                    value_start: start,
-                    raw_len: end - start,
-                    quote: QuoteType::None,
-                });
-            }
-            
-            value.push_str(chunk);
-            has_continuation = true;
-            
-            if !self.is_eof() && self.peek() == b'\r' {
-                self.cursor += 1;
-            }
-            if !self.is_eof() && self.peek() == b'\n' {
-                self.cursor += 1;
-            }
-            
-            if !is_continuation {
+                // Advance cursor past limit
+                self.cursor = limit;
+                
+                // Consume newline
+                if !self.is_eof() {
+                    let b = self.peek();
+                    if b == b'\r' { self.cursor += 1; }
+                    if !self.is_eof() && self.peek() == b'\n' { self.cursor += 1; }
+                } else {
+                    // Backslash at EOF is literal
+                    value.push('\\');
+                    break;
+                }
+            } else {
+                // No continuation or stopped at whitespace
+                value.push_str(chunk);
+                self.cursor = limit;
+                
+                // If we stopped at whitespace, we are done with the VALUE.
+                // The rest of the line is ignored (garbage/comments).
+                // However, we must ensure we don't leave the cursor in the middle of a line 
+                // if we are called by a loop that expects to consume the whole entry.
+                // Actually, `parse_with_options` calls `parse_key_value`, which calls this.
+                // `parse_key_value` then calls `self.skip_to_newline()`.
+                // So correctly stopping here is fine.
                 break;
             }
         }
         
-        // Spec 4.2.2: Unquoted values end at the first whitespace.
-        // Spec 5.2: Legacy continuation allows spaces (e.g. `docker run \`).
-        // So we strictly enforce separation only for simple single-line values.
-        let mut final_val = value;
-        if !has_continuation {
-             if let Some(idx) = final_val.find(|c: char| c == ' ' || c == '\t') {
-                 final_val.truncate(idx);
-             }
-        }
-
         Ok(ParsedValue {
-            value: Cow::Owned(final_val),
+            value: Cow::Owned(value),
             value_start: start,
             raw_len: self.cursor - start,
             quote: QuoteType::None,

@@ -126,6 +126,7 @@ pub struct Korni;
 
 impl Korni {
     /// Create a builder from a string slice
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(input: &str) -> KorniBuilder {
         KorniBuilder::new(input)
     }

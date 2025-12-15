@@ -124,7 +124,7 @@ fn test_unquoted_trailing_backslash_literal() {
 #[test]
 fn test_continuation_basic() { assert_pair("K=val\\\nnext", "K", "valnext"); }
 #[test]
-fn test_continuation_space() { assert_pair("K=val \\\n next", "K", "val  next"); } // Leading space on next line is preserved
+fn test_continuation_space() { assert_pair("K=val \\\n next", "K", "val"); } // Space terminates value, backslash ignored
 #[test]
 fn test_continuation_multiple() { assert_pair("K=a\\\nb\\\nc", "K", "abc"); }
 #[test]

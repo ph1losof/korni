@@ -93,6 +93,7 @@ pub enum QuoteType {
 use std::borrow::Cow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Entry<'a> {
     Comment(Span),
     Pair(KeyValuePair<'a>),
@@ -144,6 +145,7 @@ impl<'a> KeyValuePair<'a> {
     }
 
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         key: &'a str,
         key_start: usize,
