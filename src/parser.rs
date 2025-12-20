@@ -1,8 +1,7 @@
-use crate::ast::{Entry, KeyValuePair, ParseOptions, QuoteType, Span};
-use crate::error::Error;
 use std::borrow::Cow;
+use crate::types::{Entry, KeyValuePair, ParseOptions, QuoteType, Span};
+use crate::error::Error;
 
-/// Parsed value result with minimal position tracking
 struct ParsedValue<'a> {
     value: Cow<'a, str>,
     value_start: usize,
@@ -21,15 +20,9 @@ pub struct Parser<'a> {
 impl<'a> Parser<'a> {
     #[inline(always)]
     pub fn new(input: &'a str) -> Self {
-        Self {
-            input,
-            bytes: input.as_bytes(),
-            cursor: 0,
-            options: ParseOptions::default(),
-            bom_checked: false,
-        }
+        Self::with_options(input, ParseOptions::default())
     }
-    
+
     #[inline(always)]
     pub fn with_options(input: &'a str, options: ParseOptions) -> Self {
         Self {
@@ -41,19 +34,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse with default options (fast mode: key-value pairs only)
     pub fn parse(&mut self) -> Vec<Entry<'a>> {
-        self.parse_internal()
-    }
-    
-    /// Parse with custom options
-    pub fn parse_with_options(&mut self, options: ParseOptions) -> Vec<Entry<'a>> {
-        self.options = options;
-        self.parse_internal()
-    }
-    
-    #[inline]
-    fn parse_internal(&mut self) -> Vec<Entry<'a>> {
         let mut entries = Vec::with_capacity(32);
         while let Some(entry) = self.next_entry() {
             entries.push(entry);
@@ -61,35 +42,21 @@ impl<'a> Parser<'a> {
         entries
     }
 
-    /// Iterator support: get next entry
+    pub fn iter(self) -> EnvIterator<'a> {
+        EnvIterator { parser: self }
+    }
+
     pub fn next_entry(&mut self) -> Option<Entry<'a>> {
         if !self.bom_checked {
-            self.bom_checked = true;
-            // Optional BOM check at start
-            if self.bytes.starts_with(b"\xEF\xBB\xBF") {
-                self.cursor += 3;
-            }
-
-            // Strict BOM check: BOM in middle of file is invalid
-            if let Some(idx) = self.input.find('\u{FEFF}') {
-                if idx > 0 {
-                     return Some(Entry::Error(Error::InvalidBom {
-                         offset: idx,
-                     }));
-                }
+            if let Some(err) = self.check_bom() {
+                return Some(err);
             }
         }
 
         loop {
-            if self.is_eof() {
-                return None;
-            }
-
+            if self.is_eof() { return None; }
             self.skip_horizontal_whitespace();
-
-            if self.is_eof() {
-                return None;
-            }
+            if self.is_eof() { return None; }
 
             if self.peek() == b'\n' {
                 self.cursor += 1;
@@ -97,191 +64,154 @@ impl<'a> Parser<'a> {
             }
 
             if self.peek() == b'#' {
-                if self.options.include_comments {
-                    let comment_start = self.cursor;
-                    self.cursor += 1; // consume #
-                    self.skip_horizontal_whitespace();
-                    
-                    if let Some(pair) = self.try_parse_commented_pair() {
-                        return Some(Entry::Pair(pair));
-                    } else {
-                        self.skip_to_newline();
-                        return Some(Entry::Comment(Span::from_offsets(comment_start, self.cursor)));
-                    }
-                } else {
-                    // Fast mode: skip comment lines entirely
-                    self.skip_to_newline();
-                }
-                if !self.is_eof() && self.peek() == b'\n' { self.cursor += 1; }
-                continue;
+                return self.handle_comment();
             }
 
-            // Variable Definition
-            let mut is_exported = false;
-            // Check for "export" keyword
-            if self.cursor + 6 < self.bytes.len() && &self.bytes[self.cursor..self.cursor+6] == b"export" {
-                let next = self.bytes.get(self.cursor + 6).copied().unwrap_or(0);
-                if next == b' ' || next == b'\t' {
-                    is_exported = true;
-                    self.cursor += 6;
-                    self.skip_horizontal_whitespace();
-                }
+            if let Some(entry) = self.parse_pair() {
+                return Some(entry);
             }
-            
-            // Parse Key
-            let key_start = self.cursor;
-            self.consume_key();
-            let key_end = self.cursor;
-            
-            if key_start == key_end {
-                if !self.is_eof() && self.peek() == b'=' {
-                     let err = Entry::Error(Error::Generic {
-                        offset: key_start,
-                        message: "Empty key".into(),
-                    });
-                    self.recover_line();
-                    return Some(err);
-                }
-                self.recover_line();
-                continue;
-            }
-
-            let key_str = &self.input[key_start..key_end];
-            
-            // Validate key doesn't start with digit
-            if key_str.as_bytes()[0].is_ascii_digit() {
-                let err = Entry::Error(Error::InvalidKey {
-                    offset: key_start,
-                    reason: "Key starts with digit".into(),
-                });
-                self.recover_line();
-                return Some(err);
-            }
-
-            // Check for forbidden whitespace before =
-            if !self.is_eof() && (self.peek() == b' ' || self.peek() == b'\t') {
-                self.skip_horizontal_whitespace();
-                if !self.is_eof() && self.peek() == b'=' {
-                    let err = Entry::Error(Error::ForbiddenWhitespace {
-                        offset: key_start,
-                        location: "between key and equals",
-                    });
-                    self.recover_line();
-                    return Some(err);
-                }
-            }
-
-            if self.is_eof() || self.peek() != b'=' {
-                let err = Entry::Error(Error::Expected {
-                    offset: self.cursor,
-                    expected: "'='",
-                });
-                self.recover_line();
-                return Some(err);
-            }
-            
-            self.cursor += 1; // consume '='
-            
-            // Check for double equals
-            if !self.is_eof() && self.peek() == b'=' {
-                let err = Entry::Error(Error::DoubleEquals {
-                    offset: self.cursor,
-                });
-                self.recover_line();
-                return Some(err);
-            }
-
-            // Check for forbidden whitespace after =
-            if !self.is_eof() && (self.peek() == b' ' || self.peek() == b'\t') {
-                let err = Entry::Error(Error::ForbiddenWhitespace {
-                    offset: self.cursor,
-                    location: "after equals",
-                });
-                self.recover_line();
-                return Some(err);
-            }
-
-            // Parse Value
-            let value_start = self.cursor;
-            
-            let parsed_value = if !self.is_eof() && self.peek() == b'\'' {
-                self.parse_single_quoted_value(value_start)
-            } else if !self.is_eof() && self.peek() == b'"' {
-                self.parse_double_quoted_value(value_start)
-            } else {
-                self.parse_unquoted_value(value_start)
-            };
-
-            let entry = match parsed_value {
-                Ok(pv) => {
-                    let pair = if self.options.track_positions {
-                        KeyValuePair::new(
-                            key_str,
-                            key_start,
-                            pv.value,
-                            pv.value_start,
-                            pv.raw_len,
-                            pv.quote,
-                            is_exported,
-                            false,
-                        )
-                    } else {
-                        KeyValuePair::new_fast(
-                            key_str,
-                            pv.value,
-                            pv.quote,
-                            is_exported,
-                            false,
-                        )
-                    };
-                    Entry::Pair(pair)
-                }
-                Err(e) => {
-                    Entry::Error(e)
-                }
-            };
-
-            // Consume rest of line
-            self.skip_to_newline();
-            if !self.is_eof() && self.peek() == b'\n' { self.cursor += 1; }
-            
-            return Some(entry);
+            // If None, loop continues (ignoring the skipped line)
         }
     }
+}
 
-    #[inline]
-    fn try_parse_commented_pair(&mut self) -> Option<KeyValuePair<'a>> {
-        let saved = self.cursor;
-        
-        // Check for optional "export "
-        let mut is_exported = false;
-        if self.cursor + 6 < self.bytes.len() && &self.bytes[self.cursor..self.cursor+6] == b"export" {
-            let next = self.bytes.get(self.cursor + 6).copied().unwrap_or(0);
-            if next == b' ' || next == b'\t' {
-                is_exported = true;
-                self.cursor += 6;
-                self.skip_horizontal_whitespace();
+impl<'a> Parser<'a> {
+    fn check_bom(&mut self) -> Option<Entry<'a>> {
+        self.bom_checked = true;
+        if self.bytes.starts_with(b"\xEF\xBB\xBF") {
+            self.cursor += 3;
+        }
+        // Search only remaining slice
+        if let Some(idx) = self.input[self.cursor..].find('\u{FEFF}') {
+            return Some(Entry::Error(Error::InvalidBom { offset: self.cursor + idx }));
+        }
+        None
+    }
+
+    fn handle_comment(&mut self) -> Option<Entry<'a>> {
+        if self.options.include_comments {
+            let comment_start = self.cursor;
+            self.cursor += 1; 
+            self.skip_horizontal_whitespace();
+
+            if let Some(pair) = self.try_parse_commented_pair() {
+                 return Some(Entry::Pair(pair));
+            } else {
+                self.skip_to_newline();
+                return Some(Entry::Comment(Span::from_offsets(comment_start, self.cursor)));
             }
+        } else {
+            self.skip_to_newline();
         }
         
-        let key_start = self.cursor;
-        self.consume_key();
-        let key_end = self.cursor;
+        if !self.is_eof() && self.peek() == b'\n' { 
+            self.cursor += 1; 
+        }
         
+        self.next_entry()
+    }
+
+fn parse_pair(&mut self) -> Option<Entry<'a>> {
+        let is_exported = self.consume_export_keyword();
+
+        let key_start = self.cursor;
+        self.consume_key_chars();
+        let key_end = self.cursor;
+        let key_str = &self.input[key_start..key_end];
+
+        if key_start == key_end {
+            self.skip_horizontal_whitespace();
+            if !self.is_eof() && self.peek() == b'=' {
+                return Some(self.error_and_recover(Error::Generic { 
+                    offset: key_start, 
+                    message: "Empty key".into() 
+                }));
+            }
+
+            if is_exported {
+                self.skip_to_newline();
+                if !self.is_eof() && self.peek() == b'\n' { self.cursor += 1; }
+                return None; 
+            }
+
+            self.skip_to_newline();
+            if !self.is_eof() && self.peek() == b'\n' { self.cursor += 1; }
+            return None;
+        }
+        if key_str.as_bytes()[0].is_ascii_digit() {
+            return Some(self.error_and_recover(Error::InvalidKey { offset: key_start, reason: "Key starts with digit".into() }));
+        }
+
+        // Space before equals
+        if !self.is_eof() && matches!(self.peek(), b' ' | b'\t') {
+            self.skip_horizontal_whitespace();
+            if !self.is_eof() && self.peek() == b'=' {
+                return Some(self.error_and_recover(Error::ForbiddenWhitespace { offset: key_start, location: "between key and equals" }));
+            }
+        }
+
+        // Expect Equals
+        if self.is_eof() || self.peek() != b'=' {
+            return Some(self.error_and_recover(Error::Expected { offset: self.cursor, expected: "'='" }));
+        }
+        self.cursor += 1; // consume '='
+
+        // Double equals check
+        if !self.is_eof() && self.peek() == b'=' {
+            return Some(self.error_and_recover(Error::DoubleEquals { offset: self.cursor }));
+        }
+        // Space after equals
+        if !self.is_eof() && matches!(self.peek(), b' ' | b'\t') {
+            return Some(self.error_and_recover(Error::ForbiddenWhitespace { offset: self.cursor, location: "after equals" }));
+        }
+
+        // Parse Value
+        let value_start = self.cursor;
+        let parsed_value = if !self.is_eof() && self.peek() == b'\'' {
+            self.parse_single_quoted_value(value_start)
+        } else if !self.is_eof() && self.peek() == b'"' {
+            self.parse_double_quoted_value(value_start)
+        } else {
+            self.parse_unquoted_value(value_start)
+        };
+
+        let entry = match parsed_value {
+            Ok(pv) => {
+                let pair = if self.options.track_positions {
+                    KeyValuePair::new(key_str, key_start, pv.value, pv.value_start, pv.raw_len, pv.quote, is_exported, false)
+                } else {
+                    KeyValuePair::new_fast(key_str, pv.value, pv.quote, is_exported, false)
+                };
+                Entry::Pair(pair)
+            },
+            Err(e) => Entry::Error(e),
+        };
+
+        self.skip_to_newline();
+        if !self.is_eof() && self.peek() == b'\n' { self.cursor += 1; }
+        Some(entry)
+    }
+
+    fn try_parse_commented_pair(&mut self) -> Option<KeyValuePair<'a>> {
+        let saved = self.cursor;
+        let is_exported = self.consume_export_keyword();
+        
+        let key_start = self.cursor;
+        self.consume_key_chars();
+        let key_end = self.cursor;
+
         if key_start == key_end || self.is_eof() || self.peek() != b'=' {
             self.cursor = saved;
             return None;
         }
-        
+
         let key_str = &self.input[key_start..key_end];
         if key_str.as_bytes()[0].is_ascii_digit() {
             self.cursor = saved;
             return None;
         }
-        
-        self.cursor += 1; // consume =
-        
-        // Reuse the main parsing logic for values to ensure consistency
+
+        self.cursor += 1;
         let value_start = self.cursor;
         
         let parsed_value = if !self.is_eof() && self.peek() == b'\'' {
@@ -289,72 +219,47 @@ impl<'a> Parser<'a> {
         } else if !self.is_eof() && self.peek() == b'"' {
             self.parse_double_quoted_value(value_start)
         } else {
-            // For unquoted in comments, we need slightly different termination logic?
-            // "The value consists of all characters from the start of the value up to, but not including, the whitespace that precedes an inline comment."
-            // But here we ARE inside a comment line.
-            // "Parsing Rule: ... logic is same as standard"
-            // Actually, for "commented out" pairs like `# KEY=value`, it usually just parses until end of line.
-            // But if we want to support `# KEY="val" # comment`, we should probably stick to standard parsing
-            // but ignore the result's "comment" part if it has one?
-            // Let's reuse standard unquoted parser.
             self.parse_unquoted_value(value_start)
         };
-        
+
         match parsed_value {
             Ok(pv) => {
                 let pair = if self.options.track_positions {
-                    KeyValuePair::new(
-                        key_str,
-                        key_start,
-                        pv.value,
-                        pv.value_start,
-                        pv.raw_len,
-                        pv.quote,
-                        is_exported,
-                        true,
-                    )
+                    KeyValuePair::new(key_str, key_start, pv.value, pv.value_start, pv.raw_len, pv.quote, is_exported, true)
                 } else {
-                    KeyValuePair::new_fast(
-                        key_str,
-                        pv.value,
-                        pv.quote,
-                        is_exported,
-                        true,
-                    )
+                    KeyValuePair::new_fast(key_str, pv.value, pv.quote, is_exported, true)
                 };
-                 self.skip_to_newline();
-                 Some(pair)
+                self.skip_to_newline();
+                Some(pair)
             },
             Err(_) => {
-                // If parsing value failed (e.g. unclosed quote), we just treat line as comment
                 self.cursor = saved;
                 None
             }
         }
     }
+}
 
+impl<'a> Parser<'a> {
     #[inline]
     fn parse_single_quoted_value(&mut self, start: usize) -> Result<ParsedValue<'a>, Error> {
         self.cursor += 1; // '
         let content_start = self.cursor;
-        
-        // Optimize: use memchr-like search via slice iterator
-        // This is safe because we are searching for a byte
         let remaining = &self.bytes[self.cursor..];
+        
         if let Some(pos) = remaining.iter().position(|&b| b == b'\'') {
-             self.cursor += pos;
-             let content = &self.input[content_start..self.cursor];
-             self.cursor += 1; // closing '
-             
-             Ok(ParsedValue {
+            self.cursor += pos;
+            let content = &self.input[content_start..self.cursor];
+            self.cursor += 1;
+            Ok(ParsedValue {
                 value: Cow::Borrowed(content),
                 value_start: start,
                 raw_len: self.cursor - start,
                 quote: QuoteType::Single,
             })
         } else {
-             self.cursor = self.bytes.len();
-             Err(Error::UnclosedQuote { offset: start, quote_type: "single" })
+            self.cursor = self.bytes.len();
+            Err(Error::UnclosedQuote { offset: start, quote_type: "single" })
         }
     }
 
@@ -362,40 +267,25 @@ impl<'a> Parser<'a> {
     fn parse_double_quoted_value(&mut self, start: usize) -> Result<ParsedValue<'a>, Error> {
         self.cursor += 1; // "
         let content_start = self.cursor;
-        
-        // Fast scan for closing quote or escapes using slice iterator
-        // This avoids bounds checking in the loop
         let remaining = &self.bytes[self.cursor..];
-        
-        // Search for either " or \
-        // position() often vectorizes
-        match remaining.iter().position(|&b| b == b'"' || b == b'\\') {
-            Some(pos) => {
-                let b = remaining[pos];
-                if b == b'"' {
-                    // Happy path: found closing quote, no escapes
-                    self.cursor += pos;
-                    let content = &self.input[content_start..self.cursor];
-                    self.cursor += 1; // consume "
-                    return Ok(ParsedValue {
-                        value: Cow::Borrowed(content),
-                        value_start: start,
-                        raw_len: self.cursor - start,
-                        quote: QuoteType::Double,
-                    });
-                }
-                // Found escape, fall through to slow path
+
+        if let Some(pos) = remaining.iter().position(|&b| b == b'"' || b == b'\\') {
+            if remaining[pos] == b'"' {
                 self.cursor += pos;
+                let content = &self.input[content_start..self.cursor];
+                self.cursor += 1;
+                return Ok(ParsedValue {
+                    value: Cow::Borrowed(content),
+                    value_start: start,
+                    raw_len: self.cursor - start,
+                    quote: QuoteType::Double,
+                });
             }
-            None => {
-                // Reached EOF without finding closing quote or escape
-                self.cursor += remaining.len();
-                // Let slow path handle EOF error
-            }
+            self.cursor += pos;
+        } else {
+            self.cursor += remaining.len();
         }
-        
-        // Slow path: contains escapes
-        // Reset cursor to start of content to re-parse with escaping
+
         self.cursor = content_start;
         let mut value = String::with_capacity(32);
         
@@ -403,7 +293,6 @@ impl<'a> Parser<'a> {
             if self.is_eof() {
                 return Err(Error::UnclosedQuote { offset: start, quote_type: "double" });
             }
-
             let b = self.peek();
             if b == b'\\' && self.cursor + 1 < self.bytes.len() {
                 self.cursor += 1;
@@ -415,10 +304,7 @@ impl<'a> Parser<'a> {
                     b'\\' => value.push('\\'),
                     b'"' => value.push('"'),
                     b'$' => value.push('$'),
-                    _ => {
-                        value.push('\\');
-                        value.push(c as char);
-                    }
+                    _ => { value.push('\\'); value.push(c as char); }
                 }
                 self.cursor += 1;
             } else if b == b'"' {
@@ -439,72 +325,33 @@ impl<'a> Parser<'a> {
     #[inline]
     fn parse_unquoted_value(&mut self, start: usize) -> Result<ParsedValue<'a>, Error> {
         let mut value = String::new();
-        
         loop {
-            if self.is_eof() {
-                break;
-            }
+            if self.is_eof() { break; }
             let line_start = self.cursor;
             
-            // Strict Scan: Find first delimiter (Space, Tab, \n, \r)
-            // Note: We do NOT stop at '#'. In strict mode, an inline comment requires preceding whitespace.
-            // Since whitespace terminates the value, any '#' found before whitespace is a literal character.
             let remaining = &self.bytes[self.cursor..];
-            let (limit, stop_char) = match remaining.iter().position(|&b| b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') {
+            let (limit, stop_char) = match remaining.iter().position(|&b| matches!(b, b' ' | b'\t' | b'\n' | b'\r')) {
                 Some(pos) => (self.cursor + pos, Some(remaining[pos])),
                 None => (self.cursor + remaining.len(), None)
             };
-            
-            // Logic:
-            // 1. Extract chunk [cursor..limit]
-            // 2. If stop_char is Space/Tab -> End value.
-            // 3. If stop_char is Newline/EOF -> Check for backslash at end of chunk.
-            
+
             let chunk = &self.input[self.cursor..limit];
-            
-            // Check for backslash continuation ONLY if we didn't stop at whitespace
-            let mut is_continuation = false;
-            
-            // Helper to check if we stopped at effective EOL (Newline or EOF)
             let stopped_at_eol = matches!(stop_char, Some(b'\n') | Some(b'\r') | None);
-            
-            if stopped_at_eol {
-                // Check if last char of chunk is backslash
-                if limit > line_start && self.bytes[limit - 1] == b'\\' {
-                    is_continuation = true;
-                }
-            }
-            
+            let is_continuation = stopped_at_eol && limit > line_start && self.bytes[limit - 1] == b'\\';
+
             if is_continuation {
-                // Continuation found:
-                // Append chunk (minus backslash)
                 value.push_str(&chunk[..chunk.len()-1]);
-                
-                // Advance cursor past limit
                 self.cursor = limit;
-                
-                // Consume newline
                 if !self.is_eof() {
-                    let b = self.peek();
-                    if b == b'\r' { self.cursor += 1; }
+                    if self.peek() == b'\r' { self.cursor += 1; }
                     if !self.is_eof() && self.peek() == b'\n' { self.cursor += 1; }
                 } else {
-                    // Backslash at EOF is literal
                     value.push('\\');
                     break;
                 }
             } else {
-                // No continuation or stopped at whitespace
                 value.push_str(chunk);
                 self.cursor = limit;
-                
-                // If we stopped at whitespace, we are done with the VALUE.
-                // The rest of the line is ignored (garbage/comments).
-                // However, we must ensure we don't leave the cursor in the middle of a line 
-                // if we are called by a loop that expects to consume the whole entry.
-                // Actually, `parse_with_options` calls `parse_key_value`, which calls this.
-                // `parse_key_value` then calls `self.skip_to_newline()`.
-                // So correctly stopping here is fine.
                 break;
             }
         }
@@ -516,53 +363,68 @@ impl<'a> Parser<'a> {
             quote: QuoteType::None,
         })
     }
-    
+}
+
+impl<'a> Parser<'a> {
     #[inline(always)]
-    fn peek(&self) -> u8 {
-        self.bytes[self.cursor]
-    }
-    
-    #[inline(always)]
-    fn is_eof(&self) -> bool {
-        self.cursor >= self.bytes.len()
-    }
+    fn peek(&self) -> u8 { self.bytes[self.cursor] }
 
     #[inline(always)]
+    fn is_eof(&self) -> bool { self.cursor >= self.bytes.len() }
+
+    #[inline]
     fn skip_horizontal_whitespace(&mut self) {
         if self.cursor < self.bytes.len() {
              let remaining = &self.bytes[self.cursor..];
-             let advance = remaining.iter()
-                 .position(|&b| b != b' ' && b != b'\t')
-                 .unwrap_or(remaining.len());
+             let advance = remaining.iter().position(|&b| b != b' ' && b != b'\t').unwrap_or(remaining.len());
              self.cursor += advance;
         }
     }
 
-    #[inline(always)]
-    fn consume_key(&mut self) {
+    #[inline]
+    fn consume_key_chars(&mut self) {
         if self.cursor < self.bytes.len() {
             let remaining = &self.bytes[self.cursor..];
-            let advance = remaining.iter()
-                .position(|&b| !b.is_ascii_alphanumeric() && b != b'_')
-                .unwrap_or(remaining.len());
+            let advance = remaining.iter().position(|&b| !b.is_ascii_alphanumeric() && b != b'_').unwrap_or(remaining.len());
             self.cursor += advance;
         }
     }
 
-    #[inline(always)]
+    fn consume_export_keyword(&mut self) -> bool {
+        if self.cursor + 6 < self.bytes.len() && &self.bytes[self.cursor..self.cursor+6] == b"export" {
+            let next = self.bytes.get(self.cursor + 6).copied().unwrap_or(0);
+            if matches!(next, b' ' | b'\t') {
+                self.cursor += 6;
+                self.skip_horizontal_whitespace();
+                return true;
+            }
+        }
+        false
+    }
+
+    #[inline]
     fn skip_to_newline(&mut self) {
         if self.cursor < self.bytes.len() {
             let remaining = &self.bytes[self.cursor..];
-            let advance = remaining.iter()
-                .position(|&b| b == b'\n')
-                .unwrap_or(remaining.len());
+            let advance = remaining.iter().position(|&b| b == b'\n').unwrap_or(remaining.len());
             self.cursor += advance;
         }
     }
 
-    #[inline(always)]
-    fn recover_line(&mut self) {
+    fn error_and_recover(&mut self, err: Error) -> Entry<'a> {
         self.skip_to_newline();
         if !self.is_eof() { self.cursor += 1; }
+        Entry::Error(err)
+    }
+}
+
+pub struct EnvIterator<'a> {
+    parser: Parser<'a>,
+}
+
+impl<'a> Iterator for EnvIterator<'a> {
+    type Item = Entry<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.parser.next_entry()
     }
 }

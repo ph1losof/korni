@@ -1,10 +1,10 @@
 [package]
 name = "korni"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A blazingly fast, stateless, zero-copy parser for Ecolog Dotenv File Format (EDF) files"
-repository = "https://github.com/ph1losof/korni"
 license = "MIT"
+repository = "https://github.com/ph1losof/korni"
 
 [dependencies]
 # Zero runtime dependencies for maximum speed

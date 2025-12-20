@@ -1,33 +1,19 @@
-mod ast;
+mod error;
+mod types;
 mod parser;
-pub mod env;
-pub mod builder;
-pub mod iter;
-pub mod error;
+mod env;
+mod loader;
 
-pub use ast::*;
+pub use error::Error;
+pub use types::{Entry, KeyValuePair, ParseOptions, QuoteType, Span, Position};
 pub use env::Environment;
-pub use builder::{Korni, KorniBuilder};
-pub use iter::EnvIterator;
-pub use parser::Parser;
+pub use parser::{Parser, EnvIterator};
+pub use loader::{Korni, KorniBuilder, OwnedKorniBuilder};
 
-/// Parse input string into a list of entries (fast mode: key-value pairs only).
 pub fn parse(input: &str) -> Vec<Entry> {
-    let mut parser = Parser::new(input);
-    parser.parse()
+    Parser::new(input).parse()
 }
 
-/// Parse with custom options.
 pub fn parse_with_options(input: &str, options: ParseOptions) -> Vec<Entry> {
-    let mut parser = Parser::with_options(input, options);
-    parser.parse()
-}
-
-impl<'a> Entry<'a> {
-    pub fn as_pair(&self) -> Option<&KeyValuePair> {
-        match self {
-            Entry::Pair(kv) => Some(kv),
-            _ => None,
-        }
-    }
+    Parser::with_options(input, options).parse()
 }

@@ -1,39 +1,15 @@
 use std::fmt;
 
-/// Error type for Ecolog parser
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     InvalidUtf8 { offset: usize, reason: String },
-    
-    UnclosedQuote {
-        quote_type: &'static str,
-        offset: usize,
-    },
-    
-    InvalidKey {
-        offset: usize,
-        reason: String,
-    },
-    
-    ForbiddenWhitespace {
-        location: &'static str,  // "before equals", "after equals"
-        offset: usize,
-    },
-
+    UnclosedQuote { quote_type: &'static str, offset: usize },
+    InvalidKey { offset: usize, reason: String },
+    ForbiddenWhitespace { location: &'static str, offset: usize },
     DoubleEquals { offset: usize },
-    
     InvalidBom { offset: usize },
-    
-    Expected {
-        offset: usize,
-        expected: &'static str,
-    },
-    
-    Generic {
-        offset: usize,
-        message: String,
-    },
-    
+    Expected { offset: usize, expected: &'static str },
+    Generic { offset: usize, message: String },
     Io(String),
 }
 
@@ -60,7 +36,7 @@ impl fmt::Display for Error {
             Error::UnclosedQuote { quote_type, offset } => write!(f, "Unclosed {} quote starting at byte {}", quote_type, offset),
             Error::InvalidKey { offset, reason } => write!(f, "Invalid key at byte {}: {}", offset, reason),
             Error::ForbiddenWhitespace { location, offset } => write!(f, "Whitespace not allowed {} at byte {}", location, offset),
-            Error::DoubleEquals { offset } => write!(f, "Double equals sign detected at byte {}. To set a value starting with '=', use quotes: KEY=\"=value\"", offset),
+            Error::DoubleEquals { offset } => write!(f, "Double equals sign detected at byte {}. Use quotes: KEY=\"=val\"", offset),
             Error::InvalidBom { offset } => write!(f, "BOM found at invalid position (byte {})", offset),
             Error::Expected { offset, expected } => write!(f, "Expected {} at byte {}", expected, offset),
             Error::Generic { offset, message } => write!(f, "{} at byte {}", message, offset),

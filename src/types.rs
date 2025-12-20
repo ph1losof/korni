@@ -1,4 +1,10 @@
+use std::borrow::Cow;
 use std::ops::Range;
+use crate::error::Error;
+
+// ==================================================================================
+//  Configuration
+// ==================================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParseOptions {
@@ -7,7 +13,6 @@ pub struct ParseOptions {
 }
 
 impl Default for ParseOptions {
-    #[inline]
     fn default() -> Self {
         Self {
             include_comments: false,
@@ -17,12 +22,10 @@ impl Default for ParseOptions {
 }
 
 impl ParseOptions {
-    #[inline]
     pub fn fast() -> Self {
         Self::default()
     }
 
-    #[inline]
     pub fn full() -> Self {
         Self {
             include_comments: true,
@@ -30,6 +33,10 @@ impl ParseOptions {
         }
     }
 }
+
+// ==================================================================================
+//  Position & Spans
+// ==================================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Position {
@@ -65,23 +72,23 @@ impl Span {
         }
     }
 
-    #[inline]
     pub fn len(&self) -> usize {
         self.end.offset - self.start.offset
     }
 
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    #[inline]
     pub fn range(&self) -> Range<usize> {
         self.start.offset..self.end.offset
     }
 }
 
-/// Type of quoting used for a value
+// ==================================================================================
+//  Data Models
+// ==================================================================================
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum QuoteType {
     Single, // '
@@ -90,21 +97,32 @@ pub enum QuoteType {
     None,   // No quotes
 }
 
-use std::borrow::Cow;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(clippy::large_enum_variant)]
 pub enum Entry<'a> {
     Comment(Span),
     Pair(KeyValuePair<'a>),
     Error(Error),
 }
 
-use crate::error::Error;
+impl<'a> Entry<'a> {
+    pub fn as_pair(&self) -> Option<&KeyValuePair> {
+        match self {
+            Entry::Pair(kv) => Some(kv),
+            _ => None,
+        }
+    }
+
+    pub fn into_owned(self) -> Entry<'static> {
+        match self {
+            Entry::Pair(kv) => Entry::Pair(kv.into_owned()),
+            Entry::Comment(span) => Entry::Comment(span),
+            Entry::Error(e) => Entry::Error(e),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyValuePair<'a> {
-
     pub key: Cow<'a, str>,
     pub key_span: Option<Span>,
 
@@ -114,7 +132,6 @@ pub struct KeyValuePair<'a> {
     pub quote: QuoteType,
     pub open_quote_pos: Option<Position>,
     pub close_quote_pos: Option<Position>,
-
     pub equals_pos: Option<Position>,
 
     pub is_exported: bool,
@@ -157,9 +174,8 @@ impl<'a> KeyValuePair<'a> {
         is_comment: bool,
     ) -> Self {
         let key_end = key_start + key.len();
-        let equals_offset = key_end; // = is right after key according to the spec
         let value_end = value_start + raw_len;
-        
+
         Self {
             key: Cow::Borrowed(key),
             key_span: Some(Span::from_offsets(key_start, key_end)),
@@ -168,24 +184,12 @@ impl<'a> KeyValuePair<'a> {
             quote,
             open_quote_pos: if quote != QuoteType::None { Some(Position::from_offset(value_start)) } else { None },
             close_quote_pos: if quote != QuoteType::None { Some(Position::from_offset(value_end - 1)) } else { None },
-            equals_pos: Some(Position::from_offset(equals_offset)),
+            equals_pos: Some(Position::from_offset(key_end)), // '=' is right after key
             is_exported,
             is_comment,
         }
     }
-}
 
-impl<'a> Entry<'a> {
-    pub fn into_owned(self) -> Entry<'static> {
-        match self {
-            Entry::Pair(kv) => Entry::Pair(kv.into_owned()),
-            Entry::Comment(span) => Entry::Comment(span),
-            Entry::Error(e) => Entry::Error(e),
-        }
-    }
-}
-
-impl<'a> KeyValuePair<'a> {
     pub fn into_owned(self) -> KeyValuePair<'static> {
         KeyValuePair {
             key: Cow::Owned(self.key.into_owned()),
