@@ -16,7 +16,7 @@ Designed for high-performance tooling (LSPs, linters, formatters) and applicatio
 
 ```toml
 [dependencies]
-korni = "0.1.1"
+korni = "0.1.2"
 ```
 
 ## Quick Start

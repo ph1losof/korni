@@ -265,7 +265,7 @@ impl<'a> Parser<'a> {
 
     #[inline]
     fn parse_double_quoted_value(&mut self, start: usize) -> Result<ParsedValue<'a>, Error> {
-        self.cursor += 1; // "
+        self.cursor += 1;
         let content_start = self.cursor;
         let remaining = &self.bytes[self.cursor..];
 
@@ -287,7 +287,8 @@ impl<'a> Parser<'a> {
         }
 
         self.cursor = content_start;
-        let mut value = String::with_capacity(32);
+        let remaining_len = self.bytes.len() - self.cursor;
+        let mut value = String::with_capacity(remaining_len.saturating_sub(1));
         
         loop {
             if self.is_eof() {
@@ -324,7 +325,10 @@ impl<'a> Parser<'a> {
 
     #[inline]
     fn parse_unquoted_value(&mut self, start: usize) -> Result<ParsedValue<'a>, Error> {
-        let mut value = String::new();
+        let start_pos = self.cursor;
+        let mut needs_allocation = false;
+        let mut trailing_backslash = false;
+        
         loop {
             if self.is_eof() { break; }
             let line_start = self.cursor;
@@ -335,29 +339,68 @@ impl<'a> Parser<'a> {
                 None => (self.cursor + remaining.len(), None)
             };
 
-            let chunk = &self.input[self.cursor..limit];
             let stopped_at_eol = matches!(stop_char, Some(b'\n') | Some(b'\r') | None);
             let is_continuation = stopped_at_eol && limit > line_start && self.bytes[limit - 1] == b'\\';
 
             if is_continuation {
-                value.push_str(&chunk[..chunk.len()-1]);
+                needs_allocation = true;
                 self.cursor = limit;
                 if !self.is_eof() {
                     if self.peek() == b'\r' { self.cursor += 1; }
                     if !self.is_eof() && self.peek() == b'\n' { self.cursor += 1; }
                 } else {
-                    value.push('\\');
+                    trailing_backslash = true;
                     break;
                 }
             } else {
-                value.push_str(chunk);
                 self.cursor = limit;
                 break;
             }
         }
+
+        let value = if needs_allocation {
+            let mut value = String::with_capacity(self.cursor - start_pos);
+            self.cursor = start_pos;
+            
+            loop {
+                if self.is_eof() { break; }
+                let line_start = self.cursor;
+                
+                let remaining = &self.bytes[self.cursor..];
+                let (limit, stop_char) = match remaining.iter().position(|&b| matches!(b, b' ' | b'\t' | b'\n' | b'\r')) {
+                    Some(pos) => (self.cursor + pos, Some(remaining[pos])),
+                    None => (self.cursor + remaining.len(), None)
+                };
+
+                let chunk = &self.input[self.cursor..limit];
+                let stopped_at_eol = matches!(stop_char, Some(b'\n') | Some(b'\r') | None);
+                let is_continuation = stopped_at_eol && limit > line_start && self.bytes[limit - 1] == b'\\';
+
+                if is_continuation {
+                    value.push_str(&chunk[..chunk.len()-1]);
+                    self.cursor = limit;
+                    if !self.is_eof() {
+                        if self.peek() == b'\r' { self.cursor += 1; }
+                        if !self.is_eof() && self.peek() == b'\n' { self.cursor += 1; }
+                    } else {
+                        break;
+                    }
+                } else {
+                    value.push_str(chunk);
+                    self.cursor = limit;
+                    break;
+                }
+            }
+            if trailing_backslash {
+                value.push('\\');
+            }
+            Cow::Owned(value)
+        } else {
+            Cow::Borrowed(&self.input[start_pos..self.cursor])
+        };
         
         Ok(ParsedValue {
-            value: Cow::Owned(value),
+            value,
             value_start: start,
             raw_len: self.cursor - start,
             quote: QuoteType::None,
@@ -367,7 +410,10 @@ impl<'a> Parser<'a> {
 
 impl<'a> Parser<'a> {
     #[inline(always)]
-    fn peek(&self) -> u8 { self.bytes[self.cursor] }
+    fn peek(&self) -> u8 {
+        debug_assert!(self.cursor < self.bytes.len(), "peek() called when at EOF");
+        self.bytes[self.cursor]
+    }
 
     #[inline(always)]
     fn is_eof(&self) -> bool { self.cursor >= self.bytes.len() }

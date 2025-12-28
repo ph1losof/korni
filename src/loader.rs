@@ -82,9 +82,9 @@ impl<'a> KorniBuilder<'a> {
     pub fn parse(self) -> Result<Environment<'a>, Error> {
         let input = match self.source {
             Source::Str(s) => s,
-            Source::Bytes(b) => std::str::from_utf8(b).map_err(|e| Error::InvalidUtf8 {
-                offset: e.valid_up_to(),
-                reason: format!("Invalid UTF-8: {}", e),
+            Source::Bytes(b) => std::str::from_utf8(b).map_err(|_| Error::InvalidUtf8 {
+                offset: 0,
+                reason: "Invalid UTF-8 sequence".into(),
             })?,
         };
         
