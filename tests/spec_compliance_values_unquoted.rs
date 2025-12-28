@@ -1,5 +1,5 @@
 mod common;
-use common::{assert_pair, assert_error};
+use common::assert_pair;
 
 // --- 1. Alphanumeric Values ---
 

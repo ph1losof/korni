@@ -95,7 +95,7 @@ impl<'a> Parser<'a> {
             self.skip_horizontal_whitespace();
 
             if let Some(pair) = self.try_parse_commented_pair() {
-                 return Some(Entry::Pair(pair));
+                 return Some(Entry::Pair(Box::new(pair)));
             } else {
                 self.skip_to_newline();
                 return Some(Entry::Comment(Span::from_offsets(comment_start, self.cursor)));
@@ -182,7 +182,7 @@ fn parse_pair(&mut self) -> Option<Entry<'a>> {
                 } else {
                     KeyValuePair::new_fast(key_str, pv.value, pv.quote, is_exported, false)
                 };
-                Entry::Pair(pair)
+                Entry::Pair(Box::new(pair))
             },
             Err(e) => Entry::Error(e),
         };

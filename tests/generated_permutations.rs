@@ -1,6 +1,5 @@
 mod common;
-use common::{assert_pair, assert_error, assert_exported};
-use paste::paste;
+use common::{assert_pair, assert_exported};
 
 // Macro to generate tests for single chars as keys
 macro_rules! tests_for_chars {

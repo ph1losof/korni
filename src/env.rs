@@ -25,7 +25,7 @@ impl<'a> Environment<'a> {
         
         for entry in entries {
             match entry {
-                Entry::Pair(kv) => { env.pairs.insert(kv.key.clone(), kv); },
+                Entry::Pair(kv) => { env.pairs.insert(kv.key.clone(), *kv); },
                 Entry::Comment(span) => { env.comments.push(span); },
                 Entry::Error(err) => { env.errors.push(err); },
             }

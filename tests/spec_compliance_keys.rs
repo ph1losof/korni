@@ -47,7 +47,6 @@ fn test_invalid_start_9() { assert_error("9KEY=val", "digit"); }
 // --- 4. Invalid Internal Characters ---
 
 #[test]
-#[test]
 fn test_invalid_char_dot() { assert_error("KEY.NAME=val", "Expected '='"); }
 #[test]
 fn test_invalid_char_dash() { assert_error("KEY-NAME=val", "Expected '='"); }

@@ -1,6 +1,6 @@
 mod common;
 use common::{assert_pair, assert_error};
-use korni::{parse, Entry};
+use korni::parse;
 
 // --- 1. Real World PEM Keys ---
 

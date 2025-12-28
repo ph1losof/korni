@@ -6,19 +6,10 @@ use crate::error::Error;
 //  Configuration
 // ==================================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ParseOptions {
     pub include_comments: bool,
     pub track_positions: bool,
-}
-
-impl Default for ParseOptions {
-    fn default() -> Self {
-        Self {
-            include_comments: false,
-            track_positions: false,
-        }
-    }
 }
 
 impl ParseOptions {
@@ -100,7 +91,7 @@ pub enum QuoteType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry<'a> {
     Comment(Span),
-    Pair(KeyValuePair<'a>),
+    Pair(Box<KeyValuePair<'a>>),
     Error(Error),
 }
 
@@ -114,7 +105,7 @@ impl<'a> Entry<'a> {
 
     pub fn into_owned(self) -> Entry<'static> {
         match self {
-            Entry::Pair(kv) => Entry::Pair(kv.into_owned()),
+            Entry::Pair(kv) => Entry::Pair(Box::new(kv.into_owned())),
             Entry::Comment(span) => Entry::Comment(span),
             Entry::Error(e) => Entry::Error(e),
         }

@@ -1,4 +1,4 @@
-use korni::{parse, Entry, QuoteType};
+use korni::{parse, Entry};
 
 // --- Security & Encoding Tests ---
 

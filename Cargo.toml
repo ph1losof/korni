@@ -17,8 +17,3 @@ paste = "1.0.15"
 [[bench]]
 name = "parser_bench"
 harness = false
-
-[profile.release]
-lto = true
-codegen-units = 1
-opt-level = 3

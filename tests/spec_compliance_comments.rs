@@ -1,5 +1,5 @@
 mod common;
-use common::{assert_pair, assert_error};
+use common::assert_pair;
 use korni::{parse, Entry, ParseOptions};
 
 // --- 1. Line Comments ---

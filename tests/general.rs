@@ -1,4 +1,4 @@
-use korni::{parse, parse_with_options, Entry, KeyValuePair, ParseOptions, QuoteType, Span, Environment};
+use korni::{parse, parse_with_options, Entry, ParseOptions, QuoteType};
 
 // Tests extracted from src/lib.rs
 
@@ -1133,7 +1133,6 @@ MIIEpQIBAAKCAQEA3Tz2MR7SZiAMfQyuvBjM9Oi..
     }
 
     #[test]
-    #[test]
     fn test_hash_directly_after_equals() {
         let input = "K=#not a comment";
         let entries = parse(input);
@@ -1637,7 +1636,6 @@ GOOGLE_CLIENT_SECRET="secret-abc123""#;
         assert_eq!(kv.value, "~/docs");
     }
 
-    #[test]
     #[test]
     fn test_value_with_backtick() {
         let input = "K=`echo_hi`";
