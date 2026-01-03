@@ -126,6 +126,7 @@ pub struct KeyValuePair<'a> {
     pub equals_pos: Option<Position>,
 
     pub is_exported: bool,
+    pub export_span: Option<Span>,
     pub is_comment: bool,
 }
 
@@ -148,6 +149,7 @@ impl<'a> KeyValuePair<'a> {
             close_quote_pos: None,
             equals_pos: None,
             is_exported,
+            export_span: None,
             is_comment,
         }
     }
@@ -162,6 +164,7 @@ impl<'a> KeyValuePair<'a> {
         raw_len: usize,
         quote: QuoteType,
         is_exported: bool,
+        export_span: Option<Span>,
         is_comment: bool,
     ) -> Self {
         let key_end = key_start + key.len();
@@ -177,6 +180,7 @@ impl<'a> KeyValuePair<'a> {
             close_quote_pos: if quote != QuoteType::None { Some(Position::from_offset(value_end - 1)) } else { None },
             equals_pos: Some(Position::from_offset(key_end)), // '=' is right after key
             is_exported,
+            export_span,
             is_comment,
         }
     }
@@ -192,6 +196,7 @@ impl<'a> KeyValuePair<'a> {
             close_quote_pos: self.close_quote_pos,
             equals_pos: self.equals_pos,
             is_exported: self.is_exported,
+            export_span: self.export_span,
             is_comment: self.is_comment,
         }
     }

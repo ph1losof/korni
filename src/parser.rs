@@ -112,7 +112,8 @@ impl<'a> Parser<'a> {
     }
 
 fn parse_pair(&mut self) -> Option<Entry<'a>> {
-        let is_exported = self.consume_export_keyword();
+        let export_span = self.consume_export_keyword();
+        let is_exported = export_span.is_some();
 
         let key_start = self.cursor;
         self.consume_key_chars();
@@ -178,7 +179,7 @@ fn parse_pair(&mut self) -> Option<Entry<'a>> {
         let entry = match parsed_value {
             Ok(pv) => {
                 let pair = if self.options.track_positions {
-                    KeyValuePair::new(key_str, key_start, pv.value, pv.value_start, pv.raw_len, pv.quote, is_exported, false)
+                    KeyValuePair::new(key_str, key_start, pv.value, pv.value_start, pv.raw_len, pv.quote, is_exported, export_span, false)
                 } else {
                     KeyValuePair::new_fast(key_str, pv.value, pv.quote, is_exported, false)
                 };
@@ -194,7 +195,8 @@ fn parse_pair(&mut self) -> Option<Entry<'a>> {
 
     fn try_parse_commented_pair(&mut self) -> Option<KeyValuePair<'a>> {
         let saved = self.cursor;
-        let is_exported = self.consume_export_keyword();
+        let export_span = self.consume_export_keyword();
+        let is_exported = export_span.is_some();
         
         let key_start = self.cursor;
         self.consume_key_chars();
@@ -225,7 +227,7 @@ fn parse_pair(&mut self) -> Option<Entry<'a>> {
         match parsed_value {
             Ok(pv) => {
                 let pair = if self.options.track_positions {
-                    KeyValuePair::new(key_str, key_start, pv.value, pv.value_start, pv.raw_len, pv.quote, is_exported, true)
+                    KeyValuePair::new(key_str, key_start, pv.value, pv.value_start, pv.raw_len, pv.quote, is_exported, export_span, true)
                 } else {
                     KeyValuePair::new_fast(key_str, pv.value, pv.quote, is_exported, true)
                 };
@@ -436,16 +438,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn consume_export_keyword(&mut self) -> bool {
+    fn consume_export_keyword(&mut self) -> Option<Span> {
         if self.cursor + 6 < self.bytes.len() && &self.bytes[self.cursor..self.cursor+6] == b"export" {
             let next = self.bytes.get(self.cursor + 6).copied().unwrap_or(0);
             if matches!(next, b' ' | b'\t') {
+                let start_pos = self.cursor;
                 self.cursor += 6;
+                let end_pos = self.cursor;
                 self.skip_horizontal_whitespace();
-                return true;
+                return Some(Span::from_offsets(start_pos, end_pos));
             }
         }
-        false
+        None
     }
 
     #[inline]
