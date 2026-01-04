@@ -6,7 +6,7 @@ Designed for high-performance tooling (LSPs, linters, formatters) and applicatio
 
 ## Features
 
-- 🚀 **Blazingly Fast**: Heavily optimized using zero-copy parsing (`Cow` strings) and SIMD-friendly slice iterators.
+- 🚀 **Blazingly Fast**: Heavily optimized using nearly zero-copy parsing (`Cow` strings) and SIMD-friendly slice iterators.
 - 📍 **Introspective**: Tracks exact line and column positions (spans) for keys, values, and comments.
 - 💬 **Comment Support**: First-class support for parsing and preserving comments, including commented-out key-value pairs.
 - 🛡️ **Failure Tolerant**: Continues parsing after errors, collecting all issues instead of halting on the first one.
@@ -381,7 +381,7 @@ This parser implements the [EDF (Ecolog Dotenv File Format) 1.0.0 specification]
 
 This implementation varies in:
 
-- **Performance**: Heavily optimized with zero-copy parsing and SIMD-friendly iterators
+- **Performance**: Heavily optimized with focus on zero-copy parsing (but it is not absolutely zero-copy) and SIMD-friendly iterators
 - **API Design**: Rust-idiomatic with `Cow` strings, builders, and iterators
 - **Additional Features**: Position tracking, comment parsing, and `is_comment` flag for commented-out pairs
 

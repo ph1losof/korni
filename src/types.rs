@@ -1,6 +1,6 @@
+use crate::error::Error;
 use std::borrow::Cow;
 use std::ops::Range;
-use crate::error::Error;
 
 // ==================================================================================
 //  Configuration
@@ -31,15 +31,13 @@ impl ParseOptions {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Position {
-    pub line: usize,
-    pub col: usize,
     pub offset: usize,
 }
 
 impl Position {
     #[inline]
     pub fn from_offset(offset: usize) -> Self {
-        Self { line: 0, col: 0, offset }
+        Self { offset }
     }
 }
 
@@ -85,7 +83,7 @@ pub enum QuoteType {
     Single, // '
     Double, // "
     #[default]
-    None,   // No quotes
+    None, // No quotes
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,8 +174,16 @@ impl<'a> KeyValuePair<'a> {
             value,
             value_span: Some(Span::from_offsets(value_start, value_end)),
             quote,
-            open_quote_pos: if quote != QuoteType::None { Some(Position::from_offset(value_start)) } else { None },
-            close_quote_pos: if quote != QuoteType::None { Some(Position::from_offset(value_end - 1)) } else { None },
+            open_quote_pos: if quote != QuoteType::None {
+                Some(Position::from_offset(value_start))
+            } else {
+                None
+            },
+            close_quote_pos: if quote != QuoteType::None {
+                Some(Position::from_offset(value_end - 1))
+            } else {
+                None
+            },
             equals_pos: Some(Position::from_offset(key_end)), // '=' is right after key
             is_exported,
             export_span,
