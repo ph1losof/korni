@@ -14,7 +14,8 @@ pub fn parse_single_pair(input: &str) -> Option<(String, String)> {
 
 #[allow(dead_code)]
 pub fn assert_pair(input: &str, expected_key: &str, expected_value: &str) {
-    let pair = parse_single_pair(input).expect(&format!("Failed to parse pair from input: {:?}", input));
+    let pair =
+        parse_single_pair(input).expect(&format!("Failed to parse pair from input: {:?}", input));
     assert_eq!(pair.0, expected_key, "Key mismatch");
     assert_eq!(pair.1, expected_value, "Value mismatch");
 }
@@ -30,15 +31,27 @@ pub fn assert_error(input: &str, expected_part: &str) {
         }
     });
 
-    assert!(error.is_some(), "Expected error for input: {:?} but got success", input);
+    assert!(
+        error.is_some(),
+        "Expected error for input: {:?} but got success",
+        input
+    );
     let msg = error.unwrap();
-    assert!(msg.contains(expected_part), "Error message {:?} did not contain {:?}", msg, expected_part);
+    assert!(
+        msg.contains(expected_part),
+        "Error message {:?} did not contain {:?}",
+        msg,
+        expected_part
+    );
 }
 
 #[allow(dead_code)]
 pub fn assert_exported(input: &str, expected_key: &str, expected_value: &str) {
     let entries = parse(input);
-    let kv = entries.iter().find_map(|e| e.as_pair().map(|p| p.clone())).unwrap();
+    let kv = entries
+        .iter()
+        .find_map(|e| e.as_pair().map(|p| p.clone()))
+        .unwrap();
     assert_eq!(kv.key, expected_key);
     assert_eq!(kv.value, expected_value);
     assert!(kv.is_exported, "Expected exported flag to be true");
@@ -47,7 +60,10 @@ pub fn assert_exported(input: &str, expected_key: &str, expected_value: &str) {
 #[allow(dead_code)]
 pub fn assert_not_exported(input: &str, expected_key: &str, expected_value: &str) {
     let entries = parse(input);
-    let kv = entries.iter().find_map(|e| e.as_pair().map(|p| p.clone())).unwrap();
+    let kv = entries
+        .iter()
+        .find_map(|e| e.as_pair().map(|p| p.clone()))
+        .unwrap();
     assert_eq!(kv.key, expected_key);
     assert_eq!(kv.value, expected_value);
     assert!(!kv.is_exported, "Expected exported flag to be false");

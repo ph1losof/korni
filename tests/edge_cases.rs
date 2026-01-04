@@ -1,6 +1,6 @@
 mod common;
-use common::{assert_pair};
-use korni::{parse, Korni, Error};
+use common::assert_pair;
+use korni::{parse, Entry, Error, Korni};
 
 #[test]
 fn test_empty_input() {
@@ -20,14 +20,24 @@ fn test_whitespace_only() {
 fn test_only_comments() {
     let input = "# Comment 1\n# Comment 2\n# Comment 3";
     let entries = parse(input);
-    assert!(entries.is_empty());
+    // OLD (wrong): assert!(entries.is_empty());
+    // NEW (correct):
+    assert_eq!(entries.len(), 3);
+    for entry in entries {
+        assert!(matches!(entry, Entry::Comment(_)));
+    }
 }
 
 #[test]
 fn test_mixed_empty_lines_and_comments() {
     let input = "# Header\n\n\n# Another comment\n\n# Footer";
     let entries = parse(input);
-    assert!(entries.is_empty());
+    // OLD (wrong): assert!(entries.is_empty());
+    // NEW (correct):
+    assert_eq!(entries.len(), 3); // 3 comments
+    for entry in entries {
+        assert!(matches!(entry, Entry::Comment(_)));
+    }
 }
 
 #[test]
@@ -153,13 +163,13 @@ fn test_invalid_utf8_in_middle() {
     bytes.extend_from_slice(b"KEY=value\n");
     bytes.extend_from_slice(&[0xC0, 0x80]); // Invalid UTF-8
     bytes.extend_from_slice(b"\nKEY2=value2");
-    
+
     let result = Korni::from_bytes(&bytes).parse();
     assert!(result.is_err());
     match result {
         Err(Error::InvalidUtf8 { .. }) => {
             // Successfully detected invalid UTF-8
-        },
+        }
         _ => panic!("Expected InvalidUtf8 error"),
     }
 }

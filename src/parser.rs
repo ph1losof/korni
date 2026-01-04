@@ -9,12 +9,11 @@ struct ParsedValue<'a> {
     quote: QuoteType,
 }
 
-// Minimal state for comment scanning
 struct CommentScanState {
     line_start: usize,
     line_end: usize,
     scan_pos: usize,
-    returned_comment: bool,
+    returned_comment_entry: bool,
 }
 
 pub struct Parser<'a> {
@@ -58,19 +57,15 @@ impl<'a> Parser<'a> {
 
     #[inline]
     pub fn next_entry(&mut self) -> Option<Entry<'a>> {
-        // Fast path: check comment state
         if let Some(state) = self.comment_state.as_mut() {
-            if !state.returned_comment {
-                let line_start = state.line_start;
-                let line_end = state.line_end;
-                state.returned_comment = true;
+            if !state.returned_comment_entry {
+                state.returned_comment_entry = true;
                 return Some(Entry::Comment(Span::from_offsets(
-                    line_start - 1, // Include '#'
-                    line_end,
+                    state.line_start - 1,
+                    state.line_end,
                 )));
             }
 
-            // Extract values to avoid borrow conflicts
             let line_start = state.line_start;
             let line_end = state.line_end;
             let mut scan_pos = state.scan_pos;
@@ -91,6 +86,10 @@ impl<'a> Parser<'a> {
                         {
                             let key_str = &self.input[key_start..key_end];
 
+                            // Check for export prefix in comment
+                            let is_exported =
+                                unsafe { self.has_export_prefix(key_start, line_start) };
+
                             // Update state for next call
                             if let Some(s) = self.comment_state.as_mut() {
                                 s.scan_pos = parsed.value_start + parsed.raw_len - line_start;
@@ -104,7 +103,7 @@ impl<'a> Parser<'a> {
                                     parsed.value_start,
                                     parsed.raw_len,
                                     parsed.quote,
-                                    false,
+                                    is_exported,
                                     None,
                                     true,
                                 )
@@ -113,7 +112,7 @@ impl<'a> Parser<'a> {
                                     key_str,
                                     parsed.value,
                                     parsed.quote,
-                                    false,
+                                    is_exported,
                                     true,
                                 )
                             };
@@ -130,12 +129,13 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            // Done with comment
+            // Done scanning - no more pairs found
             self.cursor = line_end;
             if self.cursor < self.bytes.len() && self.bytes[self.cursor] == b'\n' {
                 self.cursor += 1;
             }
             self.comment_state = None;
+
             return self.next_entry();
         }
 
@@ -198,42 +198,39 @@ impl<'a> Parser<'a> {
     fn handle_comment_fast(&mut self) -> Option<Entry<'a>> {
         self.cursor += 1;
 
-        if self.options.include_comments {
-            let line_start = self.cursor;
+        let line_start = self.cursor;
 
-            // Fast newline search
-            let mut line_end = line_start;
-            while line_end < self.bytes.len() {
-                let b = unsafe { *self.bytes.get_unchecked(line_end) };
-                if b == b'\n' || b == b'\r' {
-                    break;
-                }
-                line_end += 1;
+        // Fast newline search
+        let mut line_end = line_start;
+        while line_end < self.bytes.len() {
+            let b = unsafe { *self.bytes.get_unchecked(line_end) };
+            if b == b'\n' || b == b'\r' {
+                break;
             }
+            line_end += 1;
+        }
 
-            // Set up state for scanning
+        if self.options.include_comments {
+            // Set up state for scanning - will return Comment entry first, then pairs
             self.comment_state = Some(CommentScanState {
                 line_start,
                 line_end,
                 scan_pos: 0,
-                returned_comment: false,
+                returned_comment_entry: false,
             });
 
             return self.next_entry();
         } else {
-            // Fast skip
-            while self.cursor < self.bytes.len() {
-                if unsafe { *self.bytes.get_unchecked(self.cursor) } == b'\n' {
-                    break;
-                }
+            // Just return the Comment entry and skip the line
+            self.cursor = line_end;
+            if self.cursor < self.bytes.len() && self.bytes[self.cursor] == b'\n' {
                 self.cursor += 1;
             }
+            return Some(Entry::Comment(Span::from_offsets(
+                line_start - 1, // Include '#'
+                line_end,
+            )));
         }
-
-        if self.cursor < self.bytes.len() && self.bytes[self.cursor] == b'\n' {
-            self.cursor += 1;
-        }
-        self.next_entry()
     }
 
     #[inline(always)]
@@ -287,6 +284,53 @@ impl<'a> Parser<'a> {
         }
 
         Some((key_start, key_end))
+    }
+
+    #[inline(always)]
+    unsafe fn has_export_prefix(&self, key_start: usize, line_start: usize) -> bool {
+        // Need at least 7 bytes for "export " before key_start
+        if key_start < line_start + 7 {
+            return false;
+        }
+
+        let mut check_pos = key_start;
+
+        // Skip back over any whitespace immediately before the key
+        while check_pos > line_start {
+            let b = *self.bytes.get_unchecked(check_pos - 1);
+            if b != b' ' && b != b'\t' {
+                break;
+            }
+            check_pos -= 1;
+        }
+
+        // Need at least 6 bytes for "export"
+        if check_pos < line_start + 6 {
+            return false;
+        }
+
+        // Check if preceded by "export"
+        let export_end = check_pos;
+        let export_start = export_end - 6;
+
+        if export_start < line_start {
+            return false;
+        }
+
+        // Fast memcmp for "export"
+        if &self.bytes[export_start..export_end] != b"export" {
+            return false;
+        }
+
+        // Verify there's whitespace or start of line before "export"
+        if export_start > line_start {
+            let before = *self.bytes.get_unchecked(export_start - 1);
+            if before != b' ' && before != b'\t' {
+                return false;
+            }
+        }
+
+        true
     }
 
     #[inline]

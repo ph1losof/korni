@@ -1,6 +1,6 @@
 # korni
 
-An ultra-fast, stateless, and failure-tolerant parser for `.env` files, written in Rust.
+An ultra-fast, nearly stateless, and failure-tolerant parser for `.env` files, written in Rust.
 
 Designed for high-performance tooling (LSPs, linters, formatters) and applications that need deep introspection into environment configuration files.
 
@@ -16,7 +16,7 @@ Designed for high-performance tooling (LSPs, linters, formatters) and applicatio
 
 ```toml
 [dependencies]
-korni = "0.1.2"
+korni = "0.1.4"
 ```
 
 ## Quick Start
