@@ -362,13 +362,13 @@ export DATABASE_URL=postgres://localhost/db
 
 ### EDF Specification
 
-This parser implements the [EDF (Ecolog Dotenv File Format) 1.0.0 specification](https://github.com/ph1losof/ecolog-spec).
+This parser implements the [EDF (Ecolog Dotenv File Format) 1.0.1 specification](https://github.com/ph1losof/ecolog-spec).
 
 ### Compliance Statement
 
-**`korni` aims for EDF 1.0.0 compliance.** Per the specification's compliance requirements:
+**`korni` aims for EDF 1.0.1 compliance.** Per the specification's compliance requirements:
 
-> A parser implementation claiming EDF 1.0.0 Compliance MUST adhere to ALL requirements specified in the specification. This is a strict, all-or-nothing compliance model.
+> A parser implementation claiming EDF 1.0.1 Compliance MUST adhere to ALL requirements specified in the specification. This is a strict, all-or-nothing compliance model.
 
 #### Requirements Implemented
 
@@ -387,7 +387,7 @@ This implementation varies in:
 
 #### Version Compatibility
 
-- **Specification Version**: EDF 1.0.0
+- **Specification Version**: EDF 1.0.1
 - **Semantic Versioning**: This library follows semver. Major version bumps indicate potential parsing behavior changes.
 
 ## License
