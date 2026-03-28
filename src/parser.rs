@@ -551,6 +551,53 @@ impl<'a> Parser<'a> {
         }
 
         let value_start = self.cursor;
+        // Fast path for the common case: unquoted value ending at '\n' or EOF
+        // with no continuation backslash.
+        if self.cursor < self.bytes.len() {
+            let first = unsafe { *self.bytes.get_unchecked(self.cursor) };
+            if first != b'\'' && first != b'"' {
+                let mut end = self.cursor;
+                while end < self.bytes.len() {
+                    let b = unsafe { *self.bytes.get_unchecked(end) };
+                    if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
+                        break;
+                    }
+                    end += 1;
+                }
+
+                let ends_line_cleanly =
+                    end >= self.bytes.len() || unsafe { *self.bytes.get_unchecked(end) } == b'\n';
+                let has_continuation_backslash =
+                    end > value_start && unsafe { *self.bytes.get_unchecked(end - 1) } == b'\\';
+
+                if ends_line_cleanly && !has_continuation_backslash {
+                    self.cursor = end;
+                    let value = Cow::Borrowed(&self.input[value_start..end]);
+                    let pair = if self.options.track_positions {
+                        KeyValuePair::new(
+                            key_str,
+                            key_start,
+                            value,
+                            value_start,
+                            end - value_start,
+                            QuoteType::None,
+                            is_exported,
+                            export_span,
+                            false,
+                        )
+                    } else {
+                        KeyValuePair::new_fast(key_str, value, QuoteType::None, is_exported, false)
+                    };
+                    if self.cursor < self.bytes.len()
+                        && unsafe { *self.bytes.get_unchecked(self.cursor) } == b'\n'
+                    {
+                        self.cursor += 1;
+                    }
+                    return Some(Entry::Pair(Box::new(pair)));
+                }
+            }
+        }
+
         let parsed_value = if self.cursor < self.bytes.len() && self.bytes[self.cursor] == b'\'' {
             self.parse_single_quoted_value(value_start)
         } else if self.cursor < self.bytes.len() && self.bytes[self.cursor] == b'"' {
@@ -581,17 +628,17 @@ impl<'a> Parser<'a> {
             Err(e) => Entry::Error(e),
         };
 
-        // Check inline comment
-        let saved = self.cursor;
-        while self.cursor < self.bytes.len() {
-            let b = unsafe { *self.bytes.get_unchecked(self.cursor) };
+        // Check inline comment.
+        let mut scan_pos = self.cursor;
+        while scan_pos < self.bytes.len() {
+            let b = unsafe { *self.bytes.get_unchecked(scan_pos) };
             if b != b' ' && b != b'\t' {
                 break;
             }
-            self.cursor += 1;
+            scan_pos += 1;
         }
+        self.cursor = scan_pos;
         let has_comment = self.cursor < self.bytes.len() && self.bytes[self.cursor] == b'#';
-        self.cursor = saved;
 
         if !has_comment {
             self.skip_to_newline();
@@ -701,34 +748,89 @@ impl<'a> Parser<'a> {
     #[inline]
     fn parse_unquoted_value(&mut self, start: usize) -> Result<ParsedValue<'a>, Error> {
         let start_pos = self.cursor;
-        let mut needs_allocation = false;
-        let mut trailing_backslash = false;
+        let mut limit = self.cursor;
+        while limit < self.bytes.len() {
+            let b = unsafe { *self.bytes.get_unchecked(limit) };
+            if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
+                break;
+            }
+            limit += 1;
+        }
+        self.cursor = limit;
+
+        let stopped_at_eol = limit >= self.bytes.len()
+            || matches!(unsafe { *self.bytes.get_unchecked(limit) }, b'\n' | b'\r');
+        let has_trailing_backslash =
+            limit > start_pos && unsafe { *self.bytes.get_unchecked(limit - 1) } == b'\\';
+
+        if !stopped_at_eol || !has_trailing_backslash {
+            return Ok(ParsedValue {
+                value: Cow::Borrowed(&self.input[start_pos..self.cursor]),
+                value_start: start,
+                raw_len: self.cursor - start,
+                quote: QuoteType::None,
+            });
+        }
+
+        self.parse_unquoted_value_with_continuation(start, start_pos, limit)
+    }
+
+    #[cold]
+    fn parse_unquoted_value_with_continuation(
+        &mut self,
+        start: usize,
+        start_pos: usize,
+        first_limit: usize,
+    ) -> Result<ParsedValue<'a>, Error> {
+        let first_chunk = &self.input[start_pos..first_limit];
+        let mut value = String::with_capacity(first_chunk.len());
+        value.push_str(&first_chunk[..first_chunk.len() - 1]);
+
+        self.cursor = first_limit;
+        if self.cursor < self.bytes.len() {
+            if unsafe { *self.bytes.get_unchecked(self.cursor) } == b'\r' {
+                self.cursor += 1;
+            }
+            if self.cursor < self.bytes.len()
+                && unsafe { *self.bytes.get_unchecked(self.cursor) } == b'\n'
+            {
+                self.cursor += 1;
+            }
+        } else {
+            value.push('\\');
+            return Ok(ParsedValue {
+                value: Cow::Owned(value),
+                value_start: start,
+                raw_len: self.cursor - start,
+                quote: QuoteType::None,
+            });
+        }
 
         loop {
             if self.cursor >= self.bytes.len() {
                 break;
             }
-            let line_start = self.cursor;
 
-            let mut limit = self.cursor;
-            let mut stop_char = None;
-            while limit < self.bytes.len() {
-                let b = unsafe { *self.bytes.get_unchecked(limit) };
+            let line_start = self.cursor;
+            while self.cursor < self.bytes.len() {
+                let b = unsafe { *self.bytes.get_unchecked(self.cursor) };
                 if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
-                    stop_char = Some(b);
                     break;
                 }
-                limit += 1;
+                self.cursor += 1;
             }
 
-            let stopped_at_eol = matches!(stop_char, Some(b'\n') | Some(b'\r') | None);
+            let limit = self.cursor;
+            let stopped_at_eol = limit >= self.bytes.len()
+                || matches!(unsafe { *self.bytes.get_unchecked(limit) }, b'\n' | b'\r');
             let is_continuation = stopped_at_eol
                 && limit > line_start
                 && unsafe { *self.bytes.get_unchecked(limit - 1) } == b'\\';
 
             if is_continuation {
-                needs_allocation = true;
-                self.cursor = limit;
+                let chunk = &self.input[line_start..limit];
+                value.push_str(&chunk[..chunk.len() - 1]);
+
                 if self.cursor < self.bytes.len() {
                     if unsafe { *self.bytes.get_unchecked(self.cursor) } == b'\r' {
                         self.cursor += 1;
@@ -739,73 +841,17 @@ impl<'a> Parser<'a> {
                         self.cursor += 1;
                     }
                 } else {
-                    trailing_backslash = true;
+                    value.push('\\');
                     break;
                 }
             } else {
-                self.cursor = limit;
+                value.push_str(&self.input[line_start..limit]);
                 break;
             }
         }
 
-        let value = if needs_allocation {
-            let mut value = String::with_capacity(self.cursor - start_pos);
-            self.cursor = start_pos;
-
-            loop {
-                if self.cursor >= self.bytes.len() {
-                    break;
-                }
-                let line_start = self.cursor;
-
-                let mut limit = self.cursor;
-                let mut stop_char = None;
-                while limit < self.bytes.len() {
-                    let b = unsafe { *self.bytes.get_unchecked(limit) };
-                    if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
-                        stop_char = Some(b);
-                        break;
-                    }
-                    limit += 1;
-                }
-
-                let chunk = &self.input[self.cursor..limit];
-                let stopped_at_eol = matches!(stop_char, Some(b'\n') | Some(b'\r') | None);
-                let is_continuation = stopped_at_eol
-                    && limit > line_start
-                    && unsafe { *self.bytes.get_unchecked(limit - 1) } == b'\\';
-
-                if is_continuation {
-                    value.push_str(&chunk[..chunk.len() - 1]);
-                    self.cursor = limit;
-                    if self.cursor < self.bytes.len() {
-                        if unsafe { *self.bytes.get_unchecked(self.cursor) } == b'\r' {
-                            self.cursor += 1;
-                        }
-                        if self.cursor < self.bytes.len()
-                            && unsafe { *self.bytes.get_unchecked(self.cursor) } == b'\n'
-                        {
-                            self.cursor += 1;
-                        }
-                    } else {
-                        break;
-                    }
-                } else {
-                    value.push_str(chunk);
-                    self.cursor = limit;
-                    break;
-                }
-            }
-            if trailing_backslash {
-                value.push('\\');
-            }
-            Cow::Owned(value)
-        } else {
-            Cow::Borrowed(&self.input[start_pos..self.cursor])
-        };
-
         Ok(ParsedValue {
-            value,
+            value: Cow::Owned(value),
             value_start: start,
             raw_len: self.cursor - start,
             quote: QuoteType::None,

@@ -1,6 +1,6 @@
 [package]
 name = "korni"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "A blazingly fast, nearly stateless and nearly zero-copy parser for Ecolog Dotenv File Format (EDF) files"
 license = "MIT"
